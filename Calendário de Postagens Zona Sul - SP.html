@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calendário de Postagens - Universal Zona Sul</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Firebase Compat Scripts -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 0.25rem; /* Reduzido para telas menores */
+        }
+        .day-cell {
+            min-height: 150px; /* Altura mínima reduzida para melhor encaixe */
+            display: flex;
+            flex-direction: column;
+        }
+        .day-posts-container {
+            flex-grow: 1;
+        }
+        .time-slot-editable {
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .time-slot-editable:hover {
+            background-color: #e5e7eb;
+        }
+        .time-slot-viewer {
+            cursor: default;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // --- CONFIGURAÇÃO E INICIALIZAÇÃO DO FIREBASE ---
+        const firebaseConfig = {
+          apiKey: "AIzaSyCgZvRloOvmK-jFuIwjn6tRiQejMRKz6uQ",
+          authDomain: "calendario-de-postagens.firebaseapp.com",
+          projectId: "calendario-de-postagens",
+          storageBucket: "calendario-de-postagens.appspot.com",
+          messagingSenderId: "107345899229",
+          appId: "1:107345899229:web:43a97dda45428bcadd3534",
+          measurementId: "G-7SY1F4B91H"
+        };
+        const appId = firebaseConfig.appId;
+        
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        
+        // --- CONSTANTES E DADOS GLOBAIS ---
+        const ALL_MATERIALS = [
+            'EVG', 'FJU', 'GSU', 'Calebe', 'DTC', 'UFP', 'UNP', 'VTC', 'FTU',
+            'Arimatéia', 'TdoA', 'Resgate', 'EBI', 'Socioeducativo', 'Arte - Verso', 'Arte - Frase',
+            'Vídeo/Bispo', 'Evento', 'Post - Reunião', 'IntelliMen', 'Godllywood', 'Ponto de Oração', 'Chamada', 'Collab'
+        ];
+        const MAIN_TIMES = ['08h', '10h', '12h', '15h', '18h', '22h'];
+
+        // --- FUNÇÕES AUXILIARES ---
+        const shuffleArray = (array) => {
+            let currentIndex = array.length, randomIndex;
+            while (currentIndex !== 0) {
+                randomIndex = Math.floor(Math.random() * currentIndex);
+                currentIndex--;
+                [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+            }
+            return array;
+        };
+
+        const generateInitialMonthlySchedule = (date) => {
+            const year = date.getFullYear();
+            const month = date.getMonth();
+            const numDays = new Date(year, month + 1, 0).getDate();
+            const newSchedule = {};
+            
+            const manualOnlyMaterials = [
+                'Vídeo/Bispo', 'Post - Reunião', 'Evento', 'IntelliMen', 'Godllywood', 
+                'Ponto de Oração', 'Chamada', 'Collab', 'Arte - Frase', 'Arte - Verso'
+            ];
+            const distributableMaterials = ALL_MATERIALS.filter(m => !manualOnlyMaterials.includes(m));
+
+            for (let i = 1; i <= numDays; i++) {
+                const dayDate = new Date(year, month, i);
+                const dayOfWeek = dayDate.getDay();
+                newSchedule[i] = {};
+                
+                MAIN_TIMES.forEach(time => { newSchedule[i][time] = 'Vago'; });
+
+                newSchedule[i]['08h'] = 'Arte - Frase';
+                newSchedule[i]['12h'] = (dayOfWeek === 0) ? 'Post - Reunião' : 'Arte - Verso';
+                if (dayOfWeek >= 1 && dayOfWeek <= 5) { newSchedule[i]['22h'] = 'Post - Reunião'; }
+            }
+            
+            const weekdayDistributionSlots = [];
+            for (let day = 1; day <= numDays; day++) {
+                const dayOfWeek = new Date(year, month, day).getDay();
+                if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+                    Object.keys(newSchedule[day]).forEach(time => {
+                        if (newSchedule[day][time] === 'Vago') {
+                            weekdayDistributionSlots.push({ day, time });
+                        }
+                    });
+                }
+            }
+
+            const shuffledMaterials = shuffleArray(distributableMaterials);
+            const shuffledSlots = shuffleArray(weekdayDistributionSlots);
+            shuffledMaterials.forEach((material, index) => {
+                if (index < shuffledSlots.length) {
+                    const { day, time } = shuffledSlots[index];
+                    newSchedule[day][time] = material;
+                }
+            });
+
+            return { schedule: newSchedule };
+        };
+        
+        const calculateMaterialCounts = (schedule) => {
+            const counts = {};
+            [...ALL_MATERIALS, 'Vago'].forEach(mat => { counts[mat] = 0; });
+            if (!schedule) return counts;
+            Object.values(schedule).forEach(daySchedule => {
+                Object.values(daySchedule).forEach(material => {
+                    if (material) { counts[material] = (counts[material] || 0) + 1; }
+                });
+            });
+            return counts;
+        };
+
+        // --- COMPONENTE PRINCIPAL ---
+        const App = () => {
+            const [userId, setUserId] = useState(null);
+            const [userRole, setUserRole] = useState('viewer');
+            const [appStatus, setAppStatus] = useState('loading'); // loading, ready, failed
+            const [isLoadingCalendar, setIsLoadingCalendar] = useState(true);
+            const [calendarExists, setCalendarExists] = useState(true);
+            const [currentDate, setCurrentDate] = useState(new Date());
+            const [schedule, setSchedule] = useState({});
+            const [materialCounts, setMaterialCounts] = useState({});
+            const [showEditModal, setShowEditModal] = useState(false);
+            const [showAddModal, setShowAddModal] = useState(false);
+            const [selectedSlot, setSelectedSlot] = useState(null);
+            const [dayForNewPost, setDayForNewPost] = useState(null);
+
+            useEffect(() => {
+                const initializeApp = async () => {
+                    try {
+                        // Etapa 1: Garantir a autenticação
+                        let user = auth.currentUser;
+                        if (!user) {
+                            const userCredential = await auth.signInAnonymously();
+                            user = userCredential.user;
+                        }
+                        setUserId(user.uid);
+                        
+                        // Etapa 2: Verificar permissões
+                        const permissionsRef = db.doc(`artifacts/${appId}/public/data/config/permissions`);
+                        const doc = await permissionsRef.get();
+                        
+                        if (doc.exists) {
+                            const admins = doc.data().admins || [];
+                            setUserRole(admins.includes(user.uid) ? 'admin' : 'viewer');
+                        } else {
+                            await permissionsRef.set({ admins: [user.uid] });
+                            setUserRole('admin');
+                        }
+                        
+                        // Etapa 3: Sinalizar que o app está pronto
+                        setAppStatus('ready');
+                    } catch (error) {
+                        console.error("Falha na inicialização do aplicativo:", error);
+                        setAppStatus('failed');
+                    }
+                };
+                
+                initializeApp();
+            }, []);
+
+            useEffect(() => {
+                if (appStatus !== 'ready') return;
+
+                setIsLoadingCalendar(true);
+                const year = currentDate.getFullYear();
+                const month = currentDate.getMonth() + 1;
+                const scheduleId = `${year}-${month}`;
+                const scheduleRef = db.doc(`artifacts/${appId}/public/data/schedules/${scheduleId}`);
+
+                const unsubscribe = scheduleRef.onSnapshot((docSnap) => {
+                    if (docSnap.exists) {
+                        setSchedule(docSnap.data().schedule);
+                        setMaterialCounts(calculateMaterialCounts(docSnap.data().schedule));
+                        setCalendarExists(true);
+                    } else {
+                        setCalendarExists(false);
+                        if (userRole === 'admin') {
+                            console.log(`Gerando novo cronograma para ${scheduleId}`);
+                            const newScheduleData = generateInitialMonthlySchedule(currentDate);
+                            scheduleRef.set(newScheduleData).catch(err => console.error("Erro ao criar documento:", err));
+                        }
+                    }
+                    setIsLoadingCalendar(false);
+                }, (error) => {
+                    console.error("Erro no listener do calendário:", error);
+                    setIsLoadingCalendar(false);
+                });
+
+                return () => unsubscribe();
+            }, [appStatus, currentDate, userRole]);
+
+            const handleSlotClick = (day, time, currentMaterial) => {
+                if (userRole !== 'admin') return;
+                setSelectedSlot({ day, time, currentMaterial });
+                setShowEditModal(true);
+            };
+            
+            const handleAddClick = (day) => {
+                if (userRole !== 'admin') return;
+                setDayForNewPost(day);
+                setShowAddModal(true);
+            };
+
+            const handleUpdateMaterial = async (newMaterial) => {
+                if (!selectedSlot || userRole !== 'admin') return;
+                const { day, time } = selectedSlot;
+                const year = currentDate.getFullYear();
+                const month = currentDate.getMonth() + 1;
+                const scheduleId = `${year}-${month}`;
+                const scheduleRef = db.doc(`artifacts/${appId}/public/data/schedules/${scheduleId}`);
+                const fieldPath = `schedule.${day}.${time}`;
+                
+                try {
+                    await scheduleRef.update({ [fieldPath]: newMaterial });
+                    setShowEditModal(false);
+                    setSelectedSlot(null);
+                } catch (error) {
+                    console.error("Erro ao atualizar o post:", error);
+                    alert("Falha ao atualizar. Tente novamente.");
+                }
+            };
+
+            const handleAddCustomPost = async (event) => {
+                event.preventDefault();
+                if (!dayForNewPost || userRole !== 'admin') return;
+
+                const time = event.target.time.value;
+                const material = event.target.material.value;
+                if (!time || !material) return alert("Por favor, preencha o horário e o material.");
+                
+                const formattedTime = time.replace(':', 'h');
+                const year = currentDate.getFullYear();
+                const month = currentDate.getMonth() + 1;
+                const scheduleId = `${year}-${month}`;
+                const scheduleRef = db.doc(`artifacts/${appId}/public/data/schedules/${scheduleId}`);
+                const fieldPath = `schedule.${dayForNewPost}.${formattedTime}`;
+
+                try {
+                    await scheduleRef.update({ [fieldPath]: material });
+                    setShowAddModal(false);
+                    setDayForNewPost(null);
+                } catch (error) {
+                    console.error("Erro ao adicionar post:", error);
+                    alert("Falha ao adicionar post. Tente novamente.");
+                }
+            };
+            
+            const goToPreviousMonth = () => setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+            const goToNextMonth = () => setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+            const getMonthName = (date) => date.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
+            const getDaysInMonth = () => new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
+            const getFirstDayOfMonth = () => new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
+
+            return (
+                <div className="container mx-auto p-4 md:p-8">
+                    <header className="text-center mb-6">
+                        <h1 className="text-3xl md:text-4xl font-bold text-blue-800">Calendário de Postagens</h1>
+                        <p className="text-gray-600 mt-1">Universal Zona Sul - SP</p>
+                        {appStatus === 'ready' ? (
+                            <div className="mt-4 p-3 bg-blue-100 border border-blue-200 rounded-lg text-sm space-y-1">
+                                <p><strong>Seu ID de Usuário:</strong> <span className="font-mono bg-blue-200 px-1 rounded">{userId}</span></p>
+                                <p><strong>Sua Permissão:</strong> <span className="font-bold">{userRole === 'admin' ? 'Administrador (Pode Editar)' : 'Visualizador (Apenas Leitura)'}</span></p>
+                            </div>
+                        ) : (
+                            <div className="mt-4 p-3 bg-gray-100 rounded-lg text-sm">
+                                <p>{appStatus === 'loading' ? 'Autenticando...' : 'Falha na autenticação.'}</p>
+                            </div>
+                        )}
+                        <div className="mt-3 p-3 bg-yellow-100 border-yellow-200 rounded-lg text-xs text-yellow-800">
+                            <strong>Nota:</strong> Para dar permissão de administrador a outros usuários, um admin atual precisa editar a lista de IDs no banco de dados do Firestore.
+                        </div>
+                    </header>
+                    
+                    <div className="bg-white rounded-lg shadow-lg p-4 md:p-6 mb-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <button onClick={goToPreviousMonth} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition">Mês Anterior</button>
+                            <h2 className="text-xl md:text-2xl font-bold text-gray-700">{getMonthName(currentDate)}</h2>
+                            <button onClick={goToNextMonth} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition">Próximo Mês</button>
+                        </div>
+                        
+                        <div className="p-4 bg-gray-50 rounded-md">
+                            <h3 className="text-lg font-semibold text-gray-800 mb-3">Resumo de Conteúdos do Mês</h3>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-x-4 gap-y-2">
+                                {Object.entries(materialCounts)
+                                    .filter(([, count]) => count > 0)
+                                    .sort((a, b) => a[0].localeCompare(b[0]))
+                                    .map(([material, count]) => (
+                                        <div key={material} className="flex justify-between items-center text-sm">
+                                            <span className="text-gray-600">{material}:</span>
+                                            <span className="font-bold text-blue-600 bg-blue-100 px-2 rounded-full">{count}</span>
+                                        </div>
+                                    ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-lg shadow-lg p-4 md:p-6">
+                        {appStatus !== 'ready' || isLoadingCalendar ? (
+                            <div className="text-center p-10 font-semibold text-gray-500">Carregando calendário...</div>
+                        ) : !calendarExists ? (
+                            <div className="text-center p-10 text-gray-500">O calendário para este mês ainda não foi criado por um administrador.</div>
+                        ) : (
+                            <>
+                                <div className="calendar-grid mb-2 text-center font-semibold text-gray-600">
+                                    <div>Dom</div><div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div>
+                                </div>
+                                <div className="calendar-grid">
+                                    {[...Array(getFirstDayOfMonth())].map((_, i) => <div key={`empty-${i}`} className="bg-gray-50 rounded-md border"></div>)}
+                                    {[...Array(getDaysInMonth())].map((_, i) => {
+                                        const day = i + 1;
+                                        const daySchedule = schedule[day] || {};
+                                        const sortedTimes = Object.keys(daySchedule).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+                                        return (
+                                            <div key={day} className="day-cell border rounded-md p-2 bg-white">
+                                                <div className="font-bold text-center text-gray-800">{day}</div>
+                                                <div className="day-posts-container mt-1 flex flex-col gap-1">
+                                                    {sortedTimes.map(time => {
+                                                        const material = daySchedule[time];
+                                                        return (
+                                                            <div
+                                                                key={time}
+                                                                onClick={() => handleSlotClick(day, time, material)}
+                                                                className={`p-1 text-xs rounded-sm text-center ${userRole === 'admin' ? 'time-slot-editable' : 'time-slot-viewer'} ${material === 'Vago' ? 'bg-gray-100 text-gray-500' : 'bg-green-100 text-green-800'}`}
+                                                            >
+                                                                <span className="font-semibold">{time.replace('h', ':00')}:</span> {material}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                                {userRole === 'admin' && (
+                                                    <button onClick={() => handleAddClick(day)} className="mt-auto w-full text-center py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition text-lg font-bold">+</button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </>
+                        )}
+                    </div>
+                    
+                    {userRole === 'admin' && showEditModal && selectedSlot && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm">
+                                <h3 className="text-xl font-semibold mb-2">Editar Postagem</h3>
+                                <p className="text-gray-600 mb-4">Dia {selectedSlot.day} às {selectedSlot.time}</p>
+                                <p className="text-gray-600 mb-4">Atual: <span className="font-bold">{selectedSlot.currentMaterial}</span></p>
+                                <select
+                                    className="w-full p-2 border border-gray-300 rounded-md mb-4"
+                                    defaultValue={selectedSlot.currentMaterial}
+                                    onChange={(e) => handleUpdateMaterial(e.target.value)}
+                                >
+                                    <option value="Vago">Vago</option>
+                                    {ALL_MATERIALS.sort().map(mat => <option key={mat} value={mat}>{mat}</option>)}
+                                </select>
+                                <div className="flex justify-end">
+                                    <button onClick={() => setShowEditModal(false)} className="px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400">Cancelar</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {userRole === 'admin' && showAddModal && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                            <form onSubmit={handleAddCustomPost} className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm">
+                                <h3 className="text-xl font-semibold mb-4">Adicionar Postagem Personalizada</h3>
+                                <p className="text-gray-600 mb-4">Dia {dayForNewPost}</p>
+                                <div>
+                                    <label htmlFor="time" className="block text-sm font-medium text-gray-700">Horário</label>
+                                    <input type="time" id="time" name="time" required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
+                                </div>
+                                <div className="mt-4">
+                                    <label htmlFor="material" className="block text-sm font-medium text-gray-700">Material</label>
+                                    <select id="material" name="material" required className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                        {ALL_MATERIALS.sort().map(mat => <option key={mat} value={mat}>{mat}</option>)}
+                                    </select>
+                                </div>
+                                <div className="mt-6 flex justify-end gap-3">
+                                    <button type="button" onClick={() => setShowAddModal(false)} className="px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400">Cancelar</button>
+                                    <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Salvar</button>
+                                </div>
+                            </form>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+
+    </script>
+</body>
+</html>
